@@ -1,4 +1,4 @@
-name: Dev Build
+name: Dev Build & Package
 
 on:
   push:
@@ -6,75 +6,75 @@ on:
       - dev
   workflow_dispatch:
 
-jobs:
-  build:
-    name: Build Installer
-    runs-on: windows-latest
-    
-    env:
-      UPLOAD_ARTIFACT: "true"
-      ONLY_CACHE: "false"
-      PREPARE_PATH: "Telegram/build/prepare/prepare.py"
+env:
+  # 全局环境变量
+  TDESKTOP_API_ID: 611335
+  TDESKTOP_API_HASH: d524b414d21f4d37f08684c1df41ac9c
+  PREPARE_PATH: "Telegram/build/prepare/prepare.py"
 
+jobs:
+  # 第一阶段：准备依赖 (Prepare Dependencies)
+  # 这个阶段专门用来编译巨大的第三方库 (Qt, FFmpeg等)。
+  # 分离这个阶段是为了确保即使后续构建超时，这些耗时数小时编译的依赖库也能被缓存下来。
+  prepare_deps:
+    name: Prepare Dependencies
+    runs-on: windows-latest
     defaults:
       run:
         shell: cmd
-
     steps:
-      - name: Prepare directories.
+      - name: Prepare directories
         run: |
           mkdir %userprofile%\TBuild\Libraries
           mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
           echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
 
-      - name: Get repository name.
+      - name: Get repository name
         shell: bash
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
-      - name: Clone.
+      - name: Clone Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
 
-      - name: First set up.
+      - name: Setup Environment & Cache Key
         shell: bash
         run: |
           DOCPATH=$TBUILD/$REPO_NAME/docs/building-win-x64.md
           SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
           echo "SDK=$SDK" >> $GITHUB_ENV
-
+          
+          # Fix CMake
           sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
-
+          
+          # Generate Cache Key (Must match build job)
           echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
           echo "$SDK" >> CACHE_KEY.txt
           echo "CACHE_KEY=$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')" >> $GITHUB_ENV
 
-          echo "Configurate git for cherry-picks."
-          git config --global user.email "you@example.com"
-          git config --global user.name "Sample"
-
       - uses: ilammy/msvc-dev-cmd@v1.13.0
-        name: Native Tools Command Prompt.
         with:
           arch: x64
           sdk: ${{ env.SDK }}
 
-      - name: NuGet sources.
+      - name: Setup NuGet
         run: |
           nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
           nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
 
-      - name: ThirdParty cache.
-        id: cache-third-party
+      # 缓存：ThirdParty
+      - name: Cache ThirdParty
+        id: cache-thirdparty
         uses: actions/cache@v4
         with:
           path: ${{ env.TBUILD }}\ThirdParty
           key: ${{ runner.OS }}-x64-third-party-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-x64-third-party-
 
-      - name: Libraries cache.
+      # 缓存：Libraries (包含除Qt外的库)
+      - name: Cache Libraries
         id: cache-libs
         uses: actions/cache@v4
         with:
@@ -85,9 +85,9 @@ jobs:
             ${{ env.LibrariesPath }}\cache_keys\*
             !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
           key: ${{ runner.OS }}-x64-libs-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-x64-libs-
 
-      - name: Qt cache.
+      # 缓存：Qt (巨大)
+      - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
         with:
@@ -95,26 +95,106 @@ jobs:
             ${{ env.LibrariesPath }}\[qQ]t[_-]*
             ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
           key: ${{ runner.OS }}-x64-qt-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-x64-qt-
 
-      - name: Libraries.
+      # 执行准备脚本 (只有在缓存未命中时才会大量编译)
+      - name: Run Prepare Script
+        if: steps.cache-thirdparty.outputs.cache-hit != 'true' || steps.cache-libs.outputs.cache-hit != 'true' || steps.cache-qt.outputs.cache-hit != 'true'
         env:
           GYP_MSVS_OVERRIDE_PATH: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\'
           GYP_MSVS_VERSION: 2022
         run: |
           %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
 
-      - name: Free up some disk space.
+      # 清理不必要的文件以减小缓存体积
+      - name: Cleanup before cache save
         shell: bash
         run: find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' ')' -type f ')' -o -empty ')' -delete
 
-      - name: Telegram Desktop build.
-        if: env.ONLY_CACHE == 'false'
+  # 第二阶段：构建应用 (Build Application)
+  # 这个阶段依赖于上一阶段的缓存。
+  build_app:
+    name: Build & Package App
+    needs: prepare_deps
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Prepare directories
+        run: |
+          mkdir %userprofile%\TBuild\Libraries
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Get repository name
+        shell: bash
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Clone Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+
+      - name: Setup Environment & Cache Key
+        shell: bash
+        run: |
+          DOCPATH=$TBUILD/$REPO_NAME/docs/building-win-x64.md
+          SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
+          echo "SDK=$SDK" >> $GITHUB_ENV
+          
+          # Fix CMake
+          sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          # Generate Cache Key (Same as prepare job)
+          echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
+          echo "$SDK" >> CACHE_KEY.txt
+          echo "CACHE_KEY=$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')" >> $GITHUB_ENV
+
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+
+      # 恢复缓存 (此时应该都能命中)
+      - name: Restore ThirdParty
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-x64-third-party-${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Restore Libraries
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-libs-${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Restore Qt
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-x64-qt-${{ env.CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      # 编译 Telegram 主程序
+      - name: Configure & Build
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
           call configure.bat ^
           x64 ^
+          -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
+          -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
           -D CMAKE_CONFIGURATION_TYPES=Debug ^
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
@@ -123,16 +203,18 @@ jobs:
 
           cmake --build ..\out --config Debug --parallel
 
+      # 打包
       - name: Install Inno Setup
         run: choco install innosetup
 
-      - name: Prepare Packaging
+      - name: Package Installer
         shell: powershell
         run: |
           $repoName = $env:REPO_NAME
           $tbuild = $env:TBUILD
           $outDir = "$tbuild\$repoName\out\Debug"
           $pkgDir = "$tbuild\$repoName\package"
+          $versionFile = "$tbuild\$repoName\Telegram\build\version"
           
           New-Item -ItemType Directory -Force -Path $pkgDir
           New-Item -ItemType Directory -Force -Path "$pkgDir\modules\x64\d3d"
@@ -140,27 +222,24 @@ jobs:
           Copy-Item "$outDir\Telegram.exe" "$pkgDir\Telegram.exe"
           Copy-Item "$outDir\Updater.exe" "$pkgDir\Updater.exe"
           
-          # Copy d3dcompiler_47.dll from repo source
-          # Path in repo: cmake/win_directx_helper/modules/x64/d3d/d3dcompiler_47.dll
-          # Checkout is at $tbuild\$repoName
           $dllSource = "$tbuild\$repoName\cmake\win_directx_helper\modules\x64\d3d\d3dcompiler_47.dll"
           Copy-Item $dllSource "$pkgDir\modules\x64\d3d\d3dcompiler_47.dll"
           
-          # Get Version
-          $versionFile = "$tbuild\$repoName\Telegram\build\version"
           $versionContent = Get-Content $versionFile
           $appVersion = ($versionContent | Select-String "AppVersionStr ").ToString().Split(" ", [StringSplitOptions]::RemoveEmptyEntries)[1]
           
-          echo "APP_VERSION=$appVersion" >> $env:GITHUB_ENV
-          echo "PKG_DIR=$pkgDir" >> $env:GITHUB_ENV
+          & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" `
+            /dMyAppVersion=$appVersion `
+            /dMyAppVersionFull=$appVersion `
+            /dReleasePath=$pkgDir `
+            /dMyBuildTarget=win64 `
+            "$tbuild\$repoName\Telegram\build\setup.iss"
           
-      - name: Build Installer
-        shell: cmd
-        run: |
-          "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /dMyAppVersion=%APP_VERSION% /dMyAppVersionFull=%APP_VERSION% /dReleasePath=%PKG_DIR% /dMyBuildTarget=win64 "%TBUILD%\%REPO_NAME%\Telegram\build\setup.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          echo "PKG_DIR=$pkgDir" >> $env:GITHUB_ENV
 
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Desktop-Installer
+          name: TelegramDesktop-Installer-x64
           path: ${{ env.PKG_DIR }}\tsetup*.exe
