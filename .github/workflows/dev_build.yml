@@ -19,6 +19,7 @@ jobs:
   prepare_deps:
     name: Prepare Dependencies
     runs-on: windows-latest
+    timeout-minutes: 480
     defaults:
       run:
         shell: cmd
@@ -116,6 +117,7 @@ jobs:
     name: Build & Package App
     needs: prepare_deps
     runs-on: windows-latest
+    timeout-minutes: 480
     defaults:
       run:
         shell: cmd
@@ -201,7 +203,7 @@ jobs:
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
 
-          cmake --build ..\out --config Debug --parallel 2 -- -v:m
+          cmake --build ..\out --config Debug --target Telegram Updater --parallel 1 -- -v:m
 
       - name: Upload build logs on failure
         if: failure()
