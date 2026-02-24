@@ -209,11 +209,9 @@ jobs:
         with:
           name: build-logs
           path: |
-            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\CMakeFiles\CMakeOutput.log
-            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\CMakeFiles\CMakeError.log
-            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\build.ninja
-            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\rules.ninja
-            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\*.rsp
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\*.log
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\*.tlog
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\*.txt
 
       # 打包
       - name: Install Inno Setup
