@@ -201,7 +201,19 @@ jobs:
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
 
-          cmake --build ..\out --config Debug --parallel
+          cmake --build ..\out --config Debug --parallel 2 -- -v
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\CMakeFiles\CMakeOutput.log
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\CMakeFiles\CMakeError.log
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\build.ninja
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\rules.ninja
+            ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out\**\*.rsp
 
       # 打包
       - name: Install Inno Setup
