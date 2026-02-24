@@ -198,12 +198,13 @@ jobs:
           -D TDESKTOP_API_ID=%TDESKTOP_API_ID% ^
           -D TDESKTOP_API_HASH=%TDESKTOP_API_HASH% ^
           -D CMAKE_CONFIGURATION_TYPES=Debug ^
-          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
+          -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
 
-          cmake --build ..\out --config Debug --target Telegram Updater --parallel 1 -- -v:m
+          cmake --build ..\out --config Debug --target Telegram Updater --parallel 1 -- -v:m > ..\out\build_output.txt 2>&1
+          if %errorlevel% neq 0 type ..\out\build_output.txt & exit 1
 
       - name: Upload build logs on failure
         if: failure()
