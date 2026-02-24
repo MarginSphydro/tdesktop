@@ -201,7 +201,7 @@ jobs:
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
 
-          cmake --build ..\out --config Debug --parallel 2 -- -v
+          cmake --build ..\out --config Debug --parallel 2 -- -v:m
 
       - name: Upload build logs on failure
         if: failure()
